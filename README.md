@@ -11,7 +11,7 @@ This is a flag-style derivation solver for predicate logic formula's
 |Implication          |     |=>              |
 |BiImplication        |     |<=>             |
 |Conjunction          |     |/\              |
-|Disjunction          |     |\/              |
+|Disjunction          |     |\\/             |
 |Not                  |     |!               |
 |Predicate            |     |P(x)            |
 |Propositinal variable|     |P               |
