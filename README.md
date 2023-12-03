@@ -18,10 +18,10 @@ This is a flag-style derivation solver for predicate logic formula's
 
 # todo
 
-[ ] - finish predicate operations
-[ ] - add line numbers
-[ ] - add AST generator
-[ ] - add set operation  
+- [ ] finish predicate operations
+- [ ] add line numbers
+- [ ] add AST generator
+- [ ] add set operation  
 (maybe's)
 * add case distintion
 * simplifies existance lines
