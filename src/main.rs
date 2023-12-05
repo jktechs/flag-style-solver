@@ -2,41 +2,42 @@ use std::{fmt::{Display, Debug}, collections::{HashMap, HashSet, VecDeque}};
 use std::hash::Hash;
 
 #[derive(Debug, Clone)]
-struct Scope<'a> {
-    base: HashMap<Operator<'a>, HashSet<Line<'a>>>,
-    variables: HashSet<Variable>,
-    proof_chain: VecDeque<Operator<'a>>
+struct Scope {
+    base: HashMap<Operator, HashSet<Line>>,
+    variables: HashSet<Variable>
 }
-impl<'a> Scope<'a> {
+impl Scope {
     fn add_var(&mut self, mut var: Variable) -> bool {
         var.bound = false;
         self.variables.insert(var)
     }
-    fn assume(&mut self, op: Operator<'a>) -> Operator<'a> {
+    fn assume(&mut self, op: Operator) -> Operator {
         self.base.entry(op.clone()).or_default().insert(Line::Assume(op.clone()));
         op
     }
-    fn insert(&mut self, op: Operator<'a>, line: Line<'a>) {
+    fn insert(&mut self, op: Operator, line: Line) {
         if let Some(proofs) = self.base.get(&op) {
             if proofs.contains(&line) {return;}
         }
         self.base.entry(op.clone()).or_default().insert(line);
     }
-    fn get(&self, op: &Operator<'a>) -> HashSet<Line<'a>> {
+    fn get(&self, op: &Operator) -> HashSet<Line> {
         self.base.get(op).cloned().unwrap_or_default()
     }
-    fn chain(&mut self, op: &Operator<'a>) {
-        if let Operator::False = op {return;}
-        self.proof_chain.push_back(op.clone());
-    }
     fn expand(&mut self) {
-        let mut new_scope = HashMap::<Operator<'a>, HashSet<Line<'a>>>::new();
+        let mut new_scope = HashMap::<Operator, HashSet<Line>>::new();
         while self.base.len() >= 1 {
             let op = self.base.keys().next().unwrap().clone();
             for req in self.base.remove(&op).unwrap().clone() {
                 match &op {
-                    Operator::Conjunction(_, _) => todo!(),
-                    Operator::Disjunction(_, _) => todo!(),
+                    Operator::Conjunction(a, b) => {
+                        self.insert(*a.clone(), Line::ConjElim(false,Box::new(req.clone())));
+                        self.insert(*b.clone(), Line::ConjElim(true,Box::new(req.clone())));
+                    },
+                    Operator::Disjunction(a, b) => {
+                        self.insert(*a.clone(), Line::DisjElim(Box::new(req.clone()), Err(*Operator::invert(b.clone()))));
+                        self.insert(*b.clone(), Line::DisjElim(Box::new(req.clone()), Err(*Operator::invert(a.clone()))));
+                    },
                     Operator::Implication(a, b) => {
                         self.insert(*b.clone(), Line::ImplElim(Box::new(req.clone()),Err(*a.clone())));
                     },
@@ -72,9 +73,9 @@ impl<'a> Scope<'a> {
         self.base = new_scope;
     }
 }
-impl<'a> Default for Scope<'a> {
+impl Default for Scope {
     fn default() -> Self {
-        Scope { base: HashMap::new(), variables: HashSet::new(), proof_chain: VecDeque::new() }
+        Scope { base: HashMap::new(), variables: HashSet::new() }
     }
 }
 
@@ -96,32 +97,37 @@ impl Variable {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-enum Set<'a> {
-    Variable(&'a str),
-    Intersection(Box<Set<'a>>, Box<Set<'a>>),
-    Union(Box<Set<'a>>, Box<Set<'a>>),
-    Difference(Box<Set<'a>>, Box<Set<'a>>),
-    Def(Box<Set<'a>>, Box<Operator<'a>>),
+enum Set {
+    Variable(String),
+    Intersection(Box<Set>, Box<Set>),
+    Union(Box<Set>, Box<Set>),
+    Difference(Box<Set>, Box<Set>),
+    Def(Box<Set>, Box<Operator>),
 }
 #[allow(dead_code)]
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-enum Operator<'a> {
-    Conjunction(Box<Operator<'a>>, Box<Operator<'a>>),
-    Disjunction(Box<Operator<'a>>, Box<Operator<'a>>),
-    Implication(Box<Operator<'a>>, Box<Operator<'a>>),
-    BiImplication(Box<Operator<'a>>, Box<Operator<'a>>),
-    Not(Box<Operator<'a>>),
-    In(Variable, Set<'a>),
-    Predicate(&'a str, Variable),
-    Variable(&'a str),
-    All(Variable, Box<Operator<'a>>, Box<Operator<'a>>),
-    Exist(Variable, Box<Operator<'a>>, Box<Operator<'a>>),
-    Subset(Set<'a>, Set<'a>),
-    Equals(Set<'a>, Set<'a>),
+#[derive(Clone, Hash, PartialEq, Eq)]
+enum Operator {
+    Conjunction(Box<Operator>, Box<Operator>),
+    Disjunction(Box<Operator>, Box<Operator>),
+    Implication(Box<Operator>, Box<Operator>),
+    BiImplication(Box<Operator>, Box<Operator>),
+    Not(Box<Operator>),
+    In(Variable, Set),
+    Predicate(String, Variable),
+    Variable(String),
+    All(Variable, Box<Operator>, Box<Operator>),
+    Exist(Variable, Box<Operator>, Box<Operator>),
+    Subset(Set, Set),
+    Equals(Set, Set),
     False,
     True,
 }
-impl<'a> Operator<'a> {
+impl Debug for Operator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+impl Operator {
     fn subsitute(&mut self, id_from: u32, id_to: u32) {
         match self {
             Operator::Predicate(_, v) |
@@ -171,93 +177,67 @@ impl<'a> Operator<'a> {
 }
 #[allow(dead_code)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-enum Line<'a> {
-    Assume(Operator<'a>),
+enum Line {
+    Assume(Operator),
 
-    ConjElim(bool, Box<Line<'a>>),
-    BiImplElim(bool, Box<Line<'a>>),
+    ConjElim(bool, Box<Line>),
+    BiImplElim(bool, Box<Line>),
 
-    DisjElim(Box<Line<'a>>, Box<Line<'a>>),
-    ConjIntro(Box<Line<'a>>, Box<Line<'a>>),
-    BiImplInto(Box<Line<'a>>, Box<Line<'a>>),
-    ExElim(Box<Line<'a>>, Result<Box<Line<'a>>, Operator<'a>>),
-    ImplElim(Box<Line<'a>>, Result<Box<Line<'a>>, Operator<'a>>),
-    AllElim(Box<Line<'a>>, Result<Box<Line<'a>>, Operator<'a>>, Variable),
-    NotElim(Box<Line<'a>>, Result<Box<Line<'a>>, Operator<'a>>),
+    ConjIntro(Box<Line>, Box<Line>),
+    BiImplInto(Box<Line>, Box<Line>),
+    DisjElim(Box<Line>, Result<Box<Line>, Operator>),
+    ExElim(Box<Line>, Result<Box<Line>, Operator>),
+    ImplElim(Box<Line>, Result<Box<Line>, Operator>),
+    AllElim(Box<Line>, Result<Box<Line>, Operator>, Variable),
+    NotElim(Box<Line>, Result<Box<Line>, Operator>),
 
-    DisjIntro(Box<Line<'a>>, Operator<'a>),
-    ImplIntro(Box<Line<'a>>, Operator<'a>),
-    AllIntro(Box<Line<'a>>, Variable, Operator<'a>),
-    ExIntro(Box<Line<'a>>, Variable, Operator<'a>),
-    NotIntro(Box<Line<'a>>, Operator<'a>),
-    FalseElim(Box<Line<'a>>, Operator<'a>)
+    DisjIntro(Box<Line>, Operator),
+    ImplIntro(Box<Line>, Operator),
+    AllIntro(Box<Line>, Variable, Operator),
+    ExIntro(Box<Line>, Variable, Operator),
+    NotIntro(Box<Line>, Operator),
+    FalseElim(Box<Line>, Operator)
 }
 // (Vx[x in N:P(x)]=>Ey[y in N:Q(y)]) => Ez[z in N: P(z) => Q(z)]
 fn main() {
-    let root = Operator::Implication(Box::new(Operator::Implication(Box::new(Operator::All(Variable::bound(0), Box::new(Operator::Predicate("N", Variable::bound(0))), Box::new(Operator::Predicate("P", Variable::bound(0))))), Box::new(Operator::Exist(Variable::bound(1), Box::new(Operator::Predicate("N", Variable::bound(1))), Box::new(Operator::Predicate("Q", Variable::bound(1))))))), Box::new(Operator::Exist(Variable::bound(2), Box::new(Operator::Predicate("N", Variable::bound(2))), Box::new(Operator::Implication(Box::new(Operator::Predicate("P", Variable::bound(2))),Box::new(Operator::Predicate("Q", Variable::bound(2))))) )));
+    let root = Operator::Implication(Box::new(Operator::Implication(Box::new(Operator::All(Variable::bound(0), Box::new(Operator::Predicate("N".into(), Variable::bound(0))), Box::new(Operator::Predicate("P".into(), Variable::bound(0))))), Box::new(Operator::Exist(Variable::bound(1), Box::new(Operator::Predicate("N".into(), Variable::bound(1))), Box::new(Operator::Predicate("Q".into(), Variable::bound(1))))))), Box::new(Operator::Exist(Variable::bound(2), Box::new(Operator::Predicate("N".into(), Variable::bound(2))), Box::new(Operator::Implication(Box::new(Operator::Predicate("P".into(), Variable::bound(2))),Box::new(Operator::Predicate("Q".into(), Variable::bound(2))))) )));
+    //let root = Operator::Implication(Box::new(Operator::Conjunction(Box::new(Operator::Conjunction(Box::new(Operator::Implication(Box::new(Operator::Variable("P".into())), Box::new(Operator::Variable("Z".into())))), Box::new(Operator::Implication(Box::new(Operator::Variable("Q".into())), Box::new(Operator::Variable("Z".into())))))), Box::new(Operator::Disjunction(Box::new(Operator::Variable("P".into())), Box::new(Operator::Variable("Q".into())))))), Box::new(Operator::Variable("Z".into())));
     println!("{}", root);
-    println!("{}", prove(root, Scope::default(), 0).unwrap().render().unwrap());
+    println!("{}", prove(root, Scope::default(), 0).unwrap().render());
 }
-fn prove<'a>(end: Operator<'a>, mut scope: Scope<'a>, mut n: usize) -> Result<Line<'a>, ()> {
+fn prove(end: Operator, mut scope: Scope, mut n: usize) -> Result<Line, ()> {
+    println!("{}",n);
     n += 1;
-    let reqursion = scope.proof_chain.iter().any(|x| &end == x);
 
     //println!("{}Proving: {}", " ".repeat(n), end);
-    scope.chain(&end);
-    if !reqursion {
-        if let Ok(line) = try_short_circuit(&end, scope.clone(), n) {return Ok(line)}
-    }
+    if let Ok(line) = try_short_circuit(&end, scope.clone(), n) {return Ok(line)}
     scope.expand();
-    if let Ok(line) = try_still_valid(&end, &scope, n, !reqursion) {return Ok(line)}
-    if reqursion {return Err(());}
-    if let Ok(line) = try_false_elim(&end, &scope, n) {return Ok(line)}
+    if let Ok(line) = try_still_valid(&end, &scope, n) {return Ok(line)}
+    if let Ok(line) = try_still_valid(&Operator::False, &scope, n) {return Ok(Line::FalseElim(Box::new(line), end))}
     if let Ok(line) = try_raa(&end, scope.clone(), n) {return Ok(line)}
 
     Err(())
 }
-fn try_raa<'a>(end: &Operator<'a>, mut scope: Scope<'a>, n: usize) -> Result<Line<'a>, ()> {
+fn try_raa<'a>(end: &Operator, mut scope: Scope, n: usize) -> Result<Line, ()> {
     if end == &Operator::False {return Err(())}
     let inv = *Operator::invert(Box::new(end.clone()));
-    scope.assume(inv);
-    //println!("{}doing raa on {}", " ".repeat(n), end);
-    match prove(Operator::False, scope.clone(), n) {
+    scope.assume(inv.clone());
+    // println!("{}doing raa on {}", " ".repeat(n), end);
+    match prove(Operator::False, scope, n) {
         Ok(proof) => {
-            return Ok(Line::FalseElim(Box::new(proof), end.clone()));
+            return Ok(Line::NotIntro(Box::new(proof), inv.clone()));
         },
         Err(_) => {Err(())},
     }
 }
-fn try_false_elim<'a>(end: &Operator<'a>, scope: &Scope<'a>, n: usize) -> Result<Line<'a>, ()>{
-    let false_proofs = scope.get(&Operator::False);
-    if false_proofs.len() != 0 {
-        'proof_loop:
-        for mut proof in false_proofs {
-            //println!("{}found false via {}", " ".repeat(n), proof);
-            for missing in get_missing(&mut proof) {
-                if let Err(end) = missing {
-                    match prove(end.clone(), scope.clone(), n) {
-                        Ok(new_line) => {
-                            *missing = Ok(Box::new(new_line))
-                        },
-                        Err(_) => continue 'proof_loop,
-                    }
-                    
-                }
-            }
-            return Ok(Line::FalseElim(Box::new(proof), end.clone()))
-        }
-    }
-    Err(())
-}
-fn try_still_valid<'a>(end: &Operator<'a>, scope: &Scope<'a>, n: usize, can_requrse: bool) -> Result<Line<'a>, ()> {
+fn try_still_valid(end: &Operator, scope: &Scope, n: usize) -> Result<Line, ()> {
     let proofs = scope.get(end);
     if proofs.len() != 0 {
         'proof_loop:
         for mut proof in proofs {
-            //println!("{}found it via {}", " ".repeat(n), proof);
+            //println!("{}found it via {}", " ".repeat(n), proof.get_hint());
             for missing in get_missing(&mut proof) {
                 if let Err(end) = missing {
-                    if !can_requrse {return Err(());}
                     match prove(end.clone(), scope.clone(), n) {
                         Ok(new_line) => {
                             *missing = Ok(Box::new(new_line))
@@ -272,22 +252,22 @@ fn try_still_valid<'a>(end: &Operator<'a>, scope: &Scope<'a>, n: usize, can_requ
     }
     Err(())
 }
-fn try_short_circuit<'a>(end: &Operator<'a>, mut scope: Scope<'a>, n: usize) -> Result<Line<'a>, ()> {
+fn try_short_circuit(end: &Operator, mut scope: Scope, n: usize) -> Result<Line, ()> {
     match end.clone() {
         Operator::Implication(a, b) => {
-            //println!("{}shortcut impl", " ".repeat(n));
+            // println!("{}shortcut impl", " ".repeat(n));
             let asum = scope.assume(*a);
             let proof = prove(*b, scope, n)?;
             Ok(Line::ImplIntro(Box::new(proof), asum))
         },
         Operator::Not(a) => {
-            //println!("{}shortcut not", " ".repeat(n));
-            let asum = scope.assume(*Operator::invert(a));
+            // println!("{}shortcut not", " ".repeat(n));
+            let asum = scope.assume(*a);
             let proof = prove(Operator::False, scope, n)?;
             Ok(Line::NotIntro(Box::new(proof), asum))
         },
         Operator::All(var, mut domain, mut predicate) => {
-            //println!("{}shortcut for all", " ".repeat(n));
+            // println!("{}shortcut for all", " ".repeat(n));
             domain.bind(var.index, false);
             predicate.bind(var.index, false);
             let asum = scope.assume(*domain);
@@ -296,7 +276,7 @@ fn try_short_circuit<'a>(end: &Operator<'a>, mut scope: Scope<'a>, n: usize) -> 
             Ok(Line::AllIntro(Box::new(proof), var, asum))
         },
         Operator::Exist(var, domain, predicate) => {
-            //println!("{}shortcut exists", " ".repeat(n));
+            // println!("{}shortcut exists", " ".repeat(n));
             let asum = scope.assume(Operator::All(var, domain, Operator::invert(predicate)));
             let proof = prove(Operator::False, scope, n)?;
             Ok(Line::ExIntro(Box::new(proof), var, asum))
@@ -316,16 +296,14 @@ fn try_short_circuit<'a>(end: &Operator<'a>, mut scope: Scope<'a>, n: usize) -> 
         Operator::Predicate(_, _) => Err(())
     }
 }
-fn get_missing<'a, 'b>(line: &'b mut Line<'a>) -> Vec<&'b mut Result<Box<Line<'a>>, Operator<'a>>> {
+fn get_missing(line: &mut Line) -> Vec<&mut Result<Box<Line>, Operator>> {
     let mut v = Vec::new();
     match line {
+        Line::AllElim(a, b, _) |
+        Line::DisjElim(a, b) |
         Line::ExElim(a, b) |
         Line::ImplElim(a, b) |
         Line::NotElim(a, b) => {
-            v.append(&mut get_missing(a.as_mut()));
-            v.push(b);
-        }
-        Line::AllElim(a, b, _) => {
             v.append(&mut get_missing(a.as_mut()));
             v.push(b);
         }
@@ -336,7 +314,6 @@ fn get_missing<'a, 'b>(line: &'b mut Line<'a>) -> Vec<&'b mut Result<Box<Line<'a
         },
         Line::ConjElim(_, a) |
         Line::BiImplElim(_, a) |
-        Line::DisjElim(_, a) |
         Line::DisjIntro(a, ..) |
         Line::ImplIntro(a, ..) |
         Line::AllIntro(a, ..) |
@@ -349,7 +326,7 @@ fn get_missing<'a, 'b>(line: &'b mut Line<'a>) -> Vec<&'b mut Result<Box<Line<'a
 }
 
 
-impl<'a> Display for Set<'a> {
+impl Display for Set {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Set::Variable(name) => write!(f, "{}", name),
@@ -360,7 +337,7 @@ impl<'a> Display for Set<'a> {
         }
     }
 }
-impl<'a> Display for Operator<'a> {
+impl Display for Operator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Operator::Not(a) => write!(f, "!({})", a),
@@ -391,26 +368,27 @@ impl Display for Variable {
     }
 }
 #[derive(Debug)]
-enum Statement<'a> {
+enum Statement {
     Block {
-        hint: &'a str,
-        assumption: Operator<'a>,
-        inside: Box<Statement<'a>>,
-        label: Operator<'a>
+        hint: String,
+        assumption: Operator,
+        inside: Box<Statement>,
+        label: Operator
     },
     Line {
-        previous: Vec<Box<Statement<'a>>>,
-        hint: &'a str,
-        label: Operator<'a>
+        previous: Vec<Box<Statement>>,
+        hint: String,
+        label: Operator
     },
     StillValid {
-        assumption: Operator<'a>
+        assumption: Operator
     }
 }
-impl<'a> Display for Statement<'a> {
+impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Statement::Block { hint, assumption, inside, label } => {
+                writeln!(f, "{{Assume:}}")?;
                 writeln!(f, "[ {} ]", assumption)?;
                 let mut inside = format!("{}", inside).replace("\n", "\n|");
                 inside.pop();
@@ -426,46 +404,45 @@ impl<'a> Display for Statement<'a> {
                 writeln!(f, "{}", label)
             },
             Statement::StillValid { assumption } => {
-                writeln!(f, "{{Assume:}}")?;
+                writeln!(f, "{{Still valid:}}")?;
                 writeln!(f, "{}", assumption)
             },
         }
     }
 }
-impl<'a> Line<'a> {
-    fn render(&self) -> Option<Statement<'a>> {
-        let hint = self.get_hint();
+impl Line {
+    fn render(&self) -> Statement {
+        let hint: String = self.get_hint().into();
         let vls = match self {
-            Line::Assume(_) => None,
+            Line::Assume(a) => return Statement::StillValid { assumption: a.clone() },
 
             Line::ConjElim(_, a) |
             Line::BiImplElim(_, a) |
-            Line::FalseElim(a, _) => Some(Ok(vec![a.render()])),
+            Line::FalseElim(a, _) => Ok(vec![a.render()]),
+
+            Line::ConjIntro(a, b) |
+            Line::BiImplInto(a, b) => Ok(vec![a.render(), b.render()]),
 
             Line::DisjElim(a, b) |
-            Line::ConjIntro(a, b) |
-            Line::BiImplInto(a, b) => Some(Ok(vec![a.render(), b.render()])),
-
             Line::AllElim(a, b, _) |
             Line::NotElim(a, b) |
             Line::ExElim(a, b) |
-            Line::ImplElim(a, b) => Some(Ok(vec![a.render(), b.as_ref().unwrap().render()])),
+            Line::ImplElim(a, b) => Ok(vec![a.render(), b.as_ref().unwrap().render()]),
             
             Line::DisjIntro(a, b) |
             Line::AllIntro(a, _, b) |
             Line::NotIntro(a, b) |
             Line::ImplIntro(a, b) |
-            Line::ExIntro(a, _, b) => Some(Err((a.render().unwrap_or_else(|| Statement::StillValid { assumption: b.clone() }), b.clone()))),
+            Line::ExIntro(a, _, b) => Err((a.render(), b.clone())),
         };
         let label = *self.get_label();
         match vls {
-            Some(Ok(elms)) => {
-                Some(Statement::Line { previous: elms.into_iter().flatten().map(Box::new).collect(), hint, label })
+            Ok(elms) => {
+                Statement::Line { previous: elms.into_iter().map(Box::new).collect(), hint, label }
             },
-            Some(Err((elm, assumption))) => {
-                Some(Statement::Block { hint, assumption, inside: Box::new(elm), label })
+            Err((elm, assumption)) => {
+                Statement::Block { hint, assumption, inside: Box::new(elm), label }
             }
-            _ => {None}
         }
     }
     fn get_hint(&self) -> &'static str {
@@ -488,12 +465,28 @@ impl<'a> Line<'a> {
             Line::FalseElim(_, _) => "False - Elim",
         }
     }
-    fn get_label(&self) -> Box<Operator<'a>> {
+    fn get_label(&self) -> Box<Operator> {
         match self {
             Line::Assume(a) => Box::new(a.clone()),
-            Line::ConjElim(_, _) => todo!(),
+            Line::ConjElim(a, b) => {
+                if let Operator::Conjunction(a2, b2) = *b.get_label() {
+                    if *a {
+                        b2
+                    } else {
+                        a2
+                    }
+                } else {panic!()}
+            },
             Line::BiImplElim(_, _) => todo!(),
-            Line::DisjElim(_, _) => todo!(),
+            Line::DisjElim(a, b) => {
+                if let Operator::Disjunction(a2, b2) = *a.get_label() {
+                    if b.as_ref().unwrap().get_label() == a2 {
+                        b2
+                    } else {
+                        a2
+                    }
+                } else {panic!()}
+            },
             Line::ConjIntro(_, _) => todo!(),
             Line::BiImplInto(_, _) => todo!(),
             Line::ExElim(_, _) => Box::new(Operator::False),
@@ -517,7 +510,9 @@ impl<'a> Line<'a> {
                     Box::new(Operator::Exist(b.clone(), b2.clone(), Operator::invert(c2.clone())))
                 } else {panic!()}
             },
-            Line::NotIntro(_, _) => todo!(),
+            Line::NotIntro(_, b) => {
+                Operator::invert(Box::new(b.clone()))
+            },
             Line::FalseElim(_, a) => Box::new(a.clone()),
         }
     }
