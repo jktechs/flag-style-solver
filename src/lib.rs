@@ -56,6 +56,15 @@ pub enum Line {
     NotIntro(Result<Box<Line>, Predicate>, Predicate), // proof contridiction, assumption
     FalseElim(Box<Line>, Predicate) // proof contridiction, result
 }
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum ToProve {
+    NotProven(Predicate),
+    Proven(Vec<Box<Line>>)
+}
+impl ToProve {
+    fn new(pr: Predicate) -> Self {ToProve::NotProven(pr)}
+    fn prove(&mut self, proofs: Vec<Box<Line>>) {*self = ToProve::Proven(proofs)}
+}
 impl Predicate {
     pub fn subsitute(&mut self, id_from: u32, id_to: u32) {
         use Predicate::*;
@@ -117,8 +126,8 @@ impl Display for Predicate {
             Predicate::Variable(a) => write!(f, "{}", a),
             Predicate::All(a, b, c) => write!(f, "∀{}[{}: {}]", a, b, c),
             Predicate::Exist(a, b, c) => write!(f, "∃{}[{}: {}]", a, b, c),
-            Predicate::False => write!(f, "False"),
-            Predicate::True => write!(f, "True"),
+            Predicate::False => write!(f, "false"),
+            Predicate::True => write!(f, "true"),
         }
     }
 }
@@ -145,7 +154,6 @@ impl Display for Line {
                 writeln!(f, "{}", self.hint())?;
                 writeln!(f, "{}", self.label())
             }
-
             Line::ConjIntro(Ok(a), Ok(b)) |
             Line::BiImplInto(Ok(a), Ok(b)) |
             Line::AllElim(a, Ok(b), _) |
@@ -158,7 +166,6 @@ impl Display for Line {
                 writeln!(f, "{{{}:}}", self.hint())?;
                 writeln!(f, "{}", self.label())
             },
-
             Line::DisjIntro(Ok(a), b, _) |
             Line::ImplIntro(Ok(a), b) |
             Line::AllIntro(Ok(a), b, _) |
@@ -208,7 +215,6 @@ impl Line {
     pub fn label(&self) -> Predicate {
         match self {
             Line::Assume(a) => a.clone(),
-
             Line::ConjElim(a, b) => {
                 if let Predicate::Conjunction(a2, b2) = b.label() {
                     if *a {
@@ -249,7 +255,6 @@ impl Line {
             },
             Line::NotElim(_, _) |
             Line::ExElim(_, _) => Predicate::False,
-
             Line::ConjIntro(a, b) => Predicate::Conjunction(Box::new(Line::try_label(a)), Box::new(Line::try_label(b))),
             Line::BiImplInto(a, _) => {
                 if let Predicate::Implication(a2, b2) = Line::try_label(a) {
@@ -359,12 +364,9 @@ impl Line {
 pub fn prove(formula: Predicate) -> Line {
     let mut trees = HashSet::new();
     trees.insert(Line::Proof(Err(formula)));
-    for _ in 0..5 {
+    for _ in 0..15 {
         let mut to_add = HashSet::new();
-        println!("---------------------------");
-        for i in trees.iter() {
-            println!("{:?}", i);
-        }
+        println!("{}",trees.len());
         for tree in trees.iter() {
             let mut tmp = tree.clone();
             if let Some((elm, vars, asums)) = tmp.next() {
@@ -394,7 +396,7 @@ pub fn prove(formula: Predicate) -> Line {
                 return tmp;
             }
         }
-        trees = to_add;
+        trees = to_add.into_iter().collect();
     }
     panic!()
 }
