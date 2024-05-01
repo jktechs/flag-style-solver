@@ -133,55 +133,13 @@ pub enum ProofBranch {
     Some(Vec<Proof>),
 }
 impl ProofBranch {
-    // pub fn step<F: FnMut(&Logic, &Arc<BlockProof>) -> Vec<Proof>>(
-    //     &mut self,
-    //     handle: &mut F,
-    //     proof: &Arc<BlockProof>,
-    // ) -> Option<bool> {
-    //     match self {
-    //         ProofBranch::One(p) => p.step(handle),
-    //         ProofBranch::Possible(logic) => {
-    //             let proofs = handle(logic, proof);
-    //             if proofs.is_empty() {
-    //                 return Some(false);
-    //             }
-    //             *self = if proofs.len() == 1 {
-    //                 ProofBranch::One(proofs.into_iter().next().unwrap())
-    //             } else {
-    //                 ProofBranch::Some(proofs)
-    //             };
-    //             None
-    //         }
-    //         ProofBranch::Some(proofs) => {
-    //             let mut undecided = Vec::new();
-    //             std::mem::swap(proofs, &mut undecided);
-    //             for i in undecided {
-    //                 match i.step(handle) {
-    //                     Some(true) => {
-    //                         *self = ProofBranch::One(i);
-    //                         return Some(true);
-    //                     }
-    //                     None => proofs.push(i),
-    //                     _ => {}
-    //                 }
-    //             }
-    //             if proofs.is_empty() {
-    //                 return Some(false);
-    //             }
-    //             if proofs.len() == 1 {
-    //                 *self = ProofBranch::One(proofs.pop().unwrap());
-    //             }
-    //             None
-    //         }
-    //     }
-    // }
     pub fn set_proofs(&mut self, proofs: Vec<Proof>) -> Option<bool> {
         *self = match proofs.len() {
-            0 => return Some(false),
+            0 => return None,
             1 => ProofBranch::One(proofs.into_iter().next().unwrap()),
             _ => ProofBranch::Some(proofs),
         };
-        None
+        Some(false)
     }
     pub fn format(&self, indent: usize, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let ProofBranch::One(proof) = self {
@@ -400,31 +358,6 @@ impl Proof {
             _ => vec![],
         }
     }
-    // pub fn step<F: FnMut(&Logic, &Arc<BlockProof>) -> Vec<Proof>>(
-    //     &self,
-    //     handle: &mut F,
-    // ) -> Option<bool> {
-    //     let mut all = true;
-    //     let parrent = match self {
-    //         Proof::Block(p) => p,
-    //         Proof::Line(p) => &p.parrent,
-    //         Proof::Assum(p) => &p.parrent,
-    //         Proof::True => todo!(),
-    //     };
-
-    //     for i in self.dependents() {
-    //         let step = i.lock().unwrap().step(handle, parrent);
-    //         match step {
-    //             None => all = false,
-    //             Some(false) => {
-    //                 return Some(false);
-    //             }
-    //             _ => {}
-    //         }
-    //     }
-
-    //     all.then_some(true)
-    // }
     pub fn format(&self, indent_size: usize, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let indent = "| ".repeat(indent_size);
         match self {
@@ -462,48 +395,73 @@ impl Proof {
         true
     }
 }
-pub fn step<F: Fn(&Logic, &Arc<BlockProof>) -> Vec<Proof>>(
-    this: &Proof,
-    handle: &F,
-) -> Option<bool> {
-    let mut all = true;
+pub fn step(this: &Proof) -> Option<bool> {
+    let mut all_done = true;
     'main: for i in this.dependents() {
         let mut guard = i.lock().unwrap();
-        let step = match &mut *guard {
-            ProofBranch::Possible(logic) => {
-                let parrent = match this {
-                    Proof::Block(p) => p,
-                    Proof::Line(p) => &p.parrent,
-                    Proof::Assum(p) => &p.parrent,
-                    Proof::True => panic!(),
-                };
-                let proofs = handle(logic, parrent);
-                guard.set_proofs(proofs)
-            }
-            ProofBranch::One(p) => step(p, handle),
-            ProofBranch::Some(proofs) => {
-                let mut undecided = Vec::new();
-                for i in proofs {
-                    match step(i, handle) {
-                        Some(true) => {
-                            *guard = ProofBranch::One(i.clone());
-                            continue 'main;
-                        }
-                        None => undecided.push(i.clone()),
-                        _ => {}
+        let proofs = if let ProofBranch::Possible(logic) = &mut *guard {
+            let parrent = match this {
+                Proof::Block(p) => p,
+                Proof::Line(p) => &p.parrent,
+                Proof::Assum(p) => &p.parrent,
+                Proof::True => panic!(),
+            };
+            // intro
+            let mut proofs = logic.0.clone().intro(parrent);
+            // elim
+            proofs.extend(
+                parrent
+                    .proof(logic)
+                    .into_iter()
+                    .map(|p| p.deep_clone())
+                    .collect::<Vec<_>>(),
+            );
+            //  false elim
+            proofs.extend(
+                parrent
+                    .proof(&False.wrap())
+                    .into_iter()
+                    .map(|p| p.deep_clone())
+                    .map(|p| {
+                        Proof::Line(LineProof::new(
+                            logic.clone(),
+                            parrent.clone(),
+                            [ProofBranch::One(p)],
+                        ))
+                    })
+                    .collect::<Vec<Proof>>(),
+            );
+            //  contridiction
+            proofs.push(Proof::Block(BlockProof::new(
+                logic.0.clone().invert(),
+                logic.clone(),
+                parrent.clone(),
+                ProofBranch::Possible(False.wrap()),
+            )));
+            proofs.retain(|p| p.valid());
+            proofs
+        } else {
+            let proofs = match &mut *guard {
+                ProofBranch::One(p) => std::slice::from_mut(p),
+                ProofBranch::Some(proofs) => proofs,
+                _ => panic!(),
+            };
+            let mut undecided = Vec::new();
+            for i in proofs {
+                if let Some(done) = step(i) {
+                    if done {
+                        *guard = ProofBranch::One(i.clone());
+                        continue 'main;
+                    } else {
+                        undecided.push(i.clone())
                     }
                 }
-                guard.set_proofs(undecided)
             }
+            undecided
         };
-        match step {
-            None => all = false,
-            Some(false) => return Some(false),
-            _ => {}
-        }
+        all_done &= guard.set_proofs(proofs)?;
     }
-
-    all.then_some(true)
+    Some(all_done)
 }
 impl Display for Proof {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
