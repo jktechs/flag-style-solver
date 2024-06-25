@@ -1,7 +1,12 @@
 [package]
-name = "sat_again"
+name = "logic-solver"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+
+[[bin]]
+name = "solver"
+path = "src/main.rs"
+
 [dependencies]
-tokio = { version = "1", features = ["full"] }

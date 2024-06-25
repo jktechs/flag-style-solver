@@ -1,202 +1,91 @@
-use std::{fmt::Display, sync::Arc};
+#![warn(clippy::pedantic, missing_docs, clippy::missing_docs_in_private_items)]
+#![allow(unused)]
+//! This crates allows for expressing logical statements and proving them to be true.
 
-use logic::{BlockProof, DynLogic, False, LineProof, Logic, Proof, ProofBranch};
+use std::{fmt::Pointer, io::stdout, sync::Arc};
 
-pub mod logic;
+use expressions::{DynExpression, Expression};
+use parser::{shunting_yard, solve, TokenIter};
+use proof::{Proof, Scope};
+use proposition::{Bicond, Conj, Disj, Impl, Inv, True, Var};
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Invert(pub Logic);
-impl DynLogic for Invert {
-    fn invert(self: Arc<Self>) -> Logic {
-        self.0.clone()
-    }
-    fn intro(self: Arc<Self>, _: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![]
-    }
-    fn elim(self: Arc<Self>, proof: &Proof, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![Proof::Line(LineProof::new(
-            False.wrap(),
-            scope.clone(),
-            [
-                ProofBranch::Possible(self.0.clone()),
-                ProofBranch::One(proof.clone()),
-            ],
-        ))]
-    }
-    logic_eq! {}
-}
-impl Display for Invert {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "¬{}", self.0)
-    }
+pub mod expressions;
+pub mod parser;
+pub mod proof;
+pub mod proposition;
+
+#[test]
+fn parse_expr() {
+    let pol = shunting_yard(TokenIter(
+        "(((P=>R)/\\(Q=>R))<=>((P\\/Q)=>R))".chars().enumerate(),
+    ));
+    println!("{}", solve(pol));
+    let pol = shunting_yard(TokenIter("T/\\!!T".chars().enumerate()));
+    println!("{}", solve(pol));
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Variable(pub usize);
-impl DynLogic for Variable {
-    fn invert(self: Arc<Self>) -> Logic {
-        Invert(self.wrap_rc()).wrap()
-    }
-    fn intro(self: Arc<Self>, _: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![]
-    }
-    fn elim(self: Arc<Self>, _: &Proof, _: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![]
-    }
-    logic_eq! {}
+#[test]
+fn test_truth() {
+    println!("{}", Proof::new(&True.wrap(), &Scope::empty()).unwrap());
 }
-impl Display for Variable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", (self.0 as u8 + b'A') as char)
-    }
+#[test]
+fn test_double_inversion() {
+    println!(
+        "{}",
+        Proof::new(&Inv(Inv(True.wrap()).wrap()).wrap(), &Scope::empty()).unwrap()
+    );
 }
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Conj(pub Logic, pub Logic);
-impl DynLogic for Conj {
-    fn invert(self: Arc<Self>) -> Logic {
-        Invert(self.wrap_rc()).wrap()
-    }
-    fn intro(self: Arc<Self>, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![Proof::Line(LineProof::new(
-            self.clone().wrap_rc(),
-            scope.clone(),
-            [
-                ProofBranch::Possible(self.0.clone()),
-                ProofBranch::Possible(self.1.clone()),
-            ],
-        ))]
-    }
-    fn elim(self: Arc<Self>, child: &Proof, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![
-            Proof::Line(LineProof::new(
-                self.0.clone(),
-                scope.clone(),
-                [ProofBranch::One(child.clone())],
-            )),
-            Proof::Line(LineProof::new(
-                self.1.clone(),
-                scope.clone(),
-                [ProofBranch::One(child.clone())],
-            )),
-        ]
-    }
-    logic_eq! {}
+#[test]
+fn test_excluded_middle() {
+    println!(
+        "{}",
+        Proof::new(
+            &Disj(Var('P').wrap(), Inv(Var('P').wrap()).wrap()).wrap(),
+            &Scope::empty(),
+        )
+        .unwrap()
+    );
 }
-impl Display for Conj {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}∧{})", self.0, self.1)
-    }
+#[test]
+fn test_implication_compression() {
+    println!(
+        "{}",
+        Proof::new(
+            &Impl(
+                Conj(
+                    Impl(Var('P').wrap(), Var('Q').wrap()).wrap(),
+                    Impl(Var('Q').wrap(), Var('R').wrap()).wrap()
+                )
+                .wrap(),
+                Impl(Var('P').wrap(), Var('R').wrap()).wrap()
+            )
+            .wrap(),
+            &Scope::empty(),
+        )
+        .unwrap()
+    );
 }
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Disj(pub Logic, pub Logic);
-impl DynLogic for Disj {
-    fn invert(self: Arc<Self>) -> Logic {
-        Invert(self.wrap_rc()).wrap()
-    }
-    fn intro(self: Arc<Self>, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![
-            Proof::Block(BlockProof::new(
-                self.0.clone().0.invert(),
-                self.clone().wrap_rc(),
-                scope.clone(),
-                ProofBranch::Possible(self.1.clone()),
-            )),
-            Proof::Block(BlockProof::new(
-                self.1.clone().0.invert(),
-                self.clone().wrap_rc(),
-                scope.clone(),
-                ProofBranch::Possible(self.0.clone()),
-            )),
-        ]
-    }
-    fn elim(self: Arc<Self>, child: &Proof, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![
-            Proof::Line(LineProof::new(
-                self.0.clone(),
-                scope.clone(),
-                [
-                    ProofBranch::One(child.clone()),
-                    ProofBranch::Possible(self.1.clone().0.invert()),
-                ],
-            )),
-            Proof::Line(LineProof::new(
-                self.1.clone(),
-                scope.clone(),
-                [
-                    ProofBranch::One(child.clone()),
-                    ProofBranch::Possible(self.0.clone().0.invert()),
-                ],
-            )),
-        ]
-    }
-    logic_eq! {}
+#[test]
+fn test_implication_distribution() {
+    let expr = Bicond(
+        Conj(
+            Impl(Var('P').wrap(), Var('R').wrap()).wrap(),
+            Impl(Var('Q').wrap(), Var('R').wrap()).wrap(),
+        )
+        .wrap(),
+        Impl(
+            Disj(Var('P').wrap(), Var('Q').wrap()).wrap(),
+            Var('R').wrap(),
+        )
+        .wrap(),
+    )
+    .wrap();
+    let proof = Proof::new(&expr, &Scope::empty());
+    println!("{}", proof.unwrap());
 }
-impl Display for Disj {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}∨{})", self.0, self.1)
-    }
-}
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Impl(pub Logic, pub Logic);
-impl DynLogic for Impl {
-    fn invert(self: Arc<Self>) -> Logic {
-        Invert(self.wrap_rc()).wrap()
-    }
-    fn intro(self: Arc<Self>, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![Proof::Block(BlockProof::new(
-            self.0.clone(),
-            self.clone().wrap_rc(),
-            scope.clone(),
-            ProofBranch::Possible(self.1.clone()),
-        ))]
-    }
-    fn elim(self: Arc<Self>, child: &Proof, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![Proof::Line(LineProof::new(
-            self.1.clone(),
-            scope.clone(),
-            [
-                ProofBranch::One(child.clone()),
-                ProofBranch::Possible(self.0.clone()),
-            ],
-        ))]
-    }
-    logic_eq! {}
-}
-impl Display for Impl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}⇒{})", self.0, self.1)
-    }
-}
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Bicond(pub Logic, pub Logic);
-impl DynLogic for Bicond {
-    fn invert(self: Arc<Self>) -> Logic {
-        Invert(self.wrap_rc()).wrap()
-    }
-    fn intro(self: Arc<Self>, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![Proof::Line(LineProof::new(
-            self.clone().wrap_rc(),
-            scope.clone(),
-            [
-                ProofBranch::Possible(Impl(self.0.clone(), self.1.clone()).wrap()),
-                ProofBranch::Possible(Impl(self.1.clone(), self.0.clone()).wrap()),
-            ],
-        ))]
-    }
-    fn elim(self: Arc<Self>, child: &Proof, scope: &Arc<BlockProof>) -> Vec<Proof> {
-        vec![Proof::Line(LineProof::new(
-            self.1.clone(),
-            scope.clone(),
-            [
-                ProofBranch::One(child.clone()),
-                ProofBranch::Possible(self.0.clone()),
-            ],
-        ))]
-    }
-    logic_eq! {}
-}
-impl Display for Bicond {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}⇔{})", self.0, self.1)
-    }
+#[test]
+fn test_cashe() {
+    let t_a = True.wrap();
+    let t_b = True.wrap();
+    assert_eq!(format!("{t_a:p}"), format!("{t_b:p}"));
 }
